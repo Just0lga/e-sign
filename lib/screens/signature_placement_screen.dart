@@ -28,12 +28,10 @@ class _SignaturePlacementScreenState extends State<SignaturePlacementScreen> {
   bool _isSaving = false;
   bool _isLoadingSizes = true;
 
-  // State for draggable signature
-  Offset? _signaturePosition; // Screen coordinates relative to the PDF view
-  double _signatureWidth = 100.0;
-  double _signatureHeight = 50.0; // Initial aspect ratio will be set on load
+  // Fixed signature size
+  final double _signatureWidth = 100.0;
+  double _signatureHeight = 50.0;
   double _aspectRatio = 2.0;
-  double _initialSignatureWidth = 100.0;
 
   List<Size>? _allPageSizes;
   GlobalKey _pdfViewerKey = GlobalKey();
@@ -47,10 +45,12 @@ class _SignaturePlacementScreenState extends State<SignaturePlacementScreen> {
 
   void _calculateAspectRatio() async {
     final image = await decodeImageFromList(widget.signatureBytes);
-    setState(() {
-      _aspectRatio = image.width / image.height;
-      _signatureHeight = _signatureWidth / _aspectRatio;
-    });
+    if (mounted) {
+      setState(() {
+        _aspectRatio = image.width / image.height;
+        _signatureHeight = _signatureWidth / _aspectRatio;
+      });
+    }
   }
 
   Future<void> _loadPageSizes() async {
@@ -67,17 +67,8 @@ class _SignaturePlacementScreenState extends State<SignaturePlacementScreen> {
     }
   }
 
-  void _handleTap(PdfGestureDetails details) {
-    if (_isSaving || _signaturePosition != null || _isLoadingSizes) return;
-
-    setState(() {
-      // Initial position based on tap - center the signature
-      _signaturePosition = details.position;
-    });
-  }
-
   void _onSave() async {
-    if (_signaturePosition == null || _allPageSizes == null) return;
+    if (_allPageSizes == null) return;
 
     setState(() {
       _isSaving = true;
@@ -90,64 +81,53 @@ class _SignaturePlacementScreenState extends State<SignaturePlacementScreen> {
     );
 
     try {
-      // Calculate final PDF position based on scroll offset and page sizes
-      final double viewportWidth = MediaQuery.of(context).size.width;
-      final double zoomLevel = _pdfViewerController.zoomLevel;
-      final double scrollOffset = _pdfViewerController.scrollOffset.dy;
+      // Get current page number (1-based)
+      final int currentPage = _pdfViewerController.pageNumber;
+      // Convert to 0-based index
+      final int targetPageIndex = currentPage - 1;
 
-      // Absolute Y position in the rendered document (center of the signature)
-      double absoluteY = scrollOffset + _signaturePosition!.dy;
-
-      int targetPage = 0;
-      Offset finalPdfPosition = Offset.zero;
-
-      // Default spacing for SfPdfViewer is usually around 4 logical pixels
-      const double pageSpacing = 4.0;
-
-      for (int i = 0; i < _allPageSizes!.length; i++) {
-        final Size pageSize = _allPageSizes![i];
-
-        // Calculate rendered dimensions for this page
-        final double scale = (viewportWidth / pageSize.width) * zoomLevel;
-        final double renderedHeight = pageSize.height * scale;
-
-        if (absoluteY <= renderedHeight) {
-          // Found the target page
-          targetPage = i;
-
-          // Calculate PDF coordinates
-          final double scrollOffsetX = _pdfViewerController.scrollOffset.dx;
-          final double absoluteX = scrollOffsetX + _signaturePosition!.dx;
-
-          final double pdfX = absoluteX / scale;
-          final double pdfY = absoluteY / scale;
-
-          finalPdfPosition = Offset(pdfX, pdfY);
-          break;
-        } else {
-          // Move to next page
-          absoluteY -= (renderedHeight + (pageSpacing * zoomLevel));
-        }
+      // Validate page index
+      if (targetPageIndex < 0 || targetPageIndex >= _allPageSizes!.length) {
+        throw Exception('Geçersiz sayfa numarası: $currentPage');
       }
 
-      // If we went past the last page (e.g. bottom margin), clamp to last page
-      if (targetPage >= _allPageSizes!.length) {
-        targetPage = _allPageSizes!.length - 1;
-      }
+      final Size pageSize = _allPageSizes![targetPageIndex];
 
-      // Calculate the size in PDF units
-      // We need the scale factor of the target page
-      final Size targetPageSize = _allPageSizes![targetPage];
-      final double scale = (viewportWidth / targetPageSize.width) * zoomLevel;
-      final Size pdfSignatureSize = Size(
-        _signatureWidth / scale,
-        _signatureHeight / scale,
-      );
+      // Calculate size in PDF units
+      // We'll use a fixed width relative to page width or fixed points?
+      // existing code used screen-to-pdf scaling.
+      // Let's assume a reasonable size on PDF. E.g., 100-150 points width.
+      // Or we can try to respect the visual aspect ratio.
+      // Let's define a fixed PDF width for the signature, say 150 points.
+      // Or calculate based on the screen visualization?
+      // The previous code mapped screen pixels to PDF pixels based on zoom.
+      // Here we don't have a specific "screen" size mapping because we aren't dragging.
+      // Let's give it a standard size, e.g., 20% of page width.
+
+      final double pdfSignatureWidth =
+          pageSize.width * 0.25; // 25% of page width
+      final double pdfSignatureHeight = pdfSignatureWidth / _aspectRatio;
+
+      // Calculate position (Bottom Right)
+      // PdfService expects the CENTER point of the signature.
+      // We want the bounding box to be at Bottom-Right with padding.
+      // Bounding Box Left = PageWidth - Padding - Width
+      // Bounding Box Top = PageHeight - Padding - Height
+      // Center X = Left + Width/2 = PageWidth - Padding - Width/2
+      // Center Y = Top + Height/2 = PageHeight - Padding - Height/2
+
+      const double padding = 20.0;
+
+      final double pdfX = pageSize.width - padding - (pdfSignatureWidth / 2);
+      final double pdfY = pageSize.height - padding - (pdfSignatureHeight / 2);
+
+      final Offset finalPdfPosition = Offset(pdfX, pdfY);
+      final Size pdfSignatureSize = Size(pdfSignatureWidth, pdfSignatureHeight);
 
       final File newFile = await _pdfService.addSignatureToPdf(
         widget.pdfFile,
         widget.signatureBytes,
-        targetPage,
+        targetPageIndex,
         finalPdfPosition,
         pdfSignatureSize,
       );
@@ -156,7 +136,7 @@ class _SignaturePlacementScreenState extends State<SignaturePlacementScreen> {
         Navigator.of(context).pop(); // Dismiss loading
         Navigator.of(context).pop({
           'file': newFile,
-          'page': targetPage + 1, // Return 1-indexed page for UI
+          'page': currentPage, // Return 1-indexed page
         });
       }
     } catch (e) {
@@ -165,19 +145,11 @@ class _SignaturePlacementScreenState extends State<SignaturePlacementScreen> {
         setState(() {
           _isSaving = false;
         });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('İmza ekleme hatası: $e'),
-          ),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('İmza ekleme hatası: $e')));
       }
     }
-  }
-
-  void _deleteSignature() {
-    setState(() {
-      _signaturePosition = null;
-    });
   }
 
   @override
@@ -194,8 +166,7 @@ class _SignaturePlacementScreenState extends State<SignaturePlacementScreen> {
         ),
         centerTitle: true,
         actions: [
-          if (_signaturePosition != null)
-            IconButton(icon: const Icon(Icons.check), onPressed: _onSave),
+          IconButton(icon: const Icon(Icons.check), onPressed: _onSave),
         ],
       ),
       body: Stack(
@@ -204,110 +175,52 @@ class _SignaturePlacementScreenState extends State<SignaturePlacementScreen> {
             widget.pdfFile,
             key: _pdfViewerKey,
             controller: _pdfViewerController,
-            enableDoubleTapZooming: false, // Disable double tap zoom
-            maxZoomLevel: 1.0, // Disable pinch zoom by setting max zoom to 1.0
-            onTap: (details) {
-              if (_signaturePosition == null) {
-                _handleTap(details);
-              }
-            },
+            enableDoubleTapZooming: true,
             onDocumentLoaded: (PdfDocumentLoadedDetails details) {
               _pdfViewerController.jumpToPage(widget.initialPage);
             },
           ),
           if (_isLoadingSizes) const Center(child: CircularProgressIndicator()),
-          if (_signaturePosition == null && !_isLoadingSizes)
+
+          // Fixed Bottom-Right Preview
+          if (!_isLoadingSizes)
             Positioned(
-              top: 20,
-              left: 20,
-              right: 20,
+              bottom: 100,
+              right: 10,
               child: Container(
-                padding: const EdgeInsets.all(8),
+                width: _signatureWidth,
+                height: _signatureHeight,
                 decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.7),
-                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.blue, width: 2),
+                  color: Colors.white.withOpacity(
+                    0.1,
+                  ), // Slight background for visibility
                 ),
-                child: Text(
-                  'İmzanızı yerleştirmek için PDF üzerinde herhangi bir yere dokunun',
-                  textAlign: TextAlign.center,
-                  style: GoogleFonts.poppins(
-                    fontWeight: FontWeight.w400,
-                    color: Colors.white,
-                  ),
+                child: Image.memory(widget.signatureBytes, fit: BoxFit.contain),
+              ),
+            ),
+
+          // Info text at top
+          Positioned(
+            top: 20,
+            left: 20,
+            right: 20,
+            child: Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.7),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                'İmza sayfanın sağ altına eklenecektir.',
+                textAlign: TextAlign.center,
+                style: GoogleFonts.poppins(
+                  fontWeight: FontWeight.w400,
+                  color: Colors.white,
                 ),
               ),
             ),
-          if (_signaturePosition != null)
-            Positioned(
-              left: _signaturePosition!.dx - (_signatureWidth / 2),
-              top: _signaturePosition!.dy - (_signatureHeight / 2),
-              child: GestureDetector(
-                onScaleStart: (details) {
-                  _initialSignatureWidth = _signatureWidth;
-                },
-                onScaleUpdate: (details) {
-                  setState(() {
-                    // Update position
-                    _signaturePosition = Offset(
-                      _signaturePosition!.dx + details.focalPointDelta.dx,
-                      _signaturePosition!.dy + details.focalPointDelta.dy,
-                    );
-
-                    // Update size
-                    double newWidth = _initialSignatureWidth * details.scale;
-                    double maxWidth = MediaQuery.of(context).size.width;
-
-                    if (newWidth < 50) newWidth = 50;
-                    if (newWidth > maxWidth) newWidth = maxWidth;
-
-                    _signatureWidth = newWidth;
-                    _signatureHeight = _signatureWidth / _aspectRatio;
-                  });
-                },
-                child: Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    Container(
-                      width: _signatureWidth,
-                      height: _signatureHeight,
-                      decoration: BoxDecoration(
-                        border: Border.all(color: Colors.blue, width: 2),
-                      ),
-                      child: Image.memory(
-                        widget.signatureBytes,
-                        fit: BoxFit.fill,
-                      ),
-                    ),
-                    // Delete Button
-                    Positioned(
-                      top: -20, // Increased hit area
-                      right: -20, // Increased hit area
-                      child: GestureDetector(
-                        onTap: _deleteSignature,
-                        child: Container(
-                          color: Colors.transparent, // Hit test target
-                          padding: const EdgeInsets.all(
-                            8,
-                          ), // Larger touch target
-                          child: Container(
-                            decoration: const BoxDecoration(
-                              color: Colors.red,
-                              shape: BoxShape.circle,
-                            ),
-                            padding: const EdgeInsets.all(4),
-                            child: const Icon(
-                              Icons.close,
-                              size: 20, // Slightly larger icon
-                              color: Colors.white,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
+          ),
         ],
       ),
     );

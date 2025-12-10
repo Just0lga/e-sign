@@ -1,6 +1,5 @@
 import 'package:e_sign/screens/homepage.dart';
 import 'package:flutter/material.dart';
-import 'package:e_sign/screens/splash_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
