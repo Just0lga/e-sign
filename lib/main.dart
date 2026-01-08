@@ -1,8 +1,13 @@
 import 'package:e_sign/screens/homepage.dart';
 import 'package:flutter/material.dart';
 
-void main() {
+import 'package:flutter/services.dart';
+
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await SystemChrome.setPreferredOrientations([
+    DeviceOrientation.portraitUp,
+  ]);
   runApp(const MyApp());
 }
 
